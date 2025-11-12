@@ -48,16 +48,26 @@ func Execute() error {
 }
 
 func runRoot(cmd *cobra.Command, args []string) error {
+	macs, names, policies, err := parseAndValidateFlags()
+	if err != nil {
+		return err
+	}
+
+	if apply {
+		return applyToCluster(macs, names, policies)
+	}
+
+	return generateAndOutput(macs, names, policies)
+}
+
+func parseAndValidateFlags() (macs, names, policies []string, err error) {
 	// Parse comma-separated MAC addresses
-	macs := parseMACAddresses(macAddresses)
+	macs = parseMACAddresses(macAddresses)
 	if len(macs) == 0 {
-		return fmt.Errorf("at least one MAC address must be specified")
+		return nil, nil, nil, fmt.Errorf("at least one MAC address must be specified")
 	}
 
 	// Parse naming options
-	var policies []string
-	var names []string
-
 	if namePolicies != "" {
 		policies = parseCommaSeparated(namePolicies)
 	}
@@ -67,89 +77,101 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 	// Validate inputs
 	if len(policies) == 0 && len(names) == 0 {
-		return fmt.Errorf("either --name-policies or --names must be specified")
+		return nil, nil, nil, fmt.Errorf("either --name-policies or --names must be specified")
 	}
 
 	if len(policies) > 0 && len(names) > 0 {
-		return fmt.Errorf("--name-policies and --names are mutually exclusive")
+		return nil, nil, nil, fmt.Errorf("--name-policies and --names are mutually exclusive")
 	}
 
 	// If using --names, count must match MACs count
 	if len(names) > 0 && len(names) != len(macs) {
-		return fmt.Errorf("number of names (%d) must match number of MAC addresses (%d)", len(names), len(macs))
+		return nil, nil, nil, fmt.Errorf("number of names (%d) must match number of MAC addresses (%d)", len(names), len(macs))
 	}
 
-	// Generate the MachineConfig
-	var mc *machineconfig.MachineConfig
-	var err error
+	return macs, names, policies, nil
+}
 
-	if apply {
-		// Determine if cluster is single-node
-		kubeconfigPath := getKubeconfigPath()
+func applyToCluster(macs, names, policies []string) error {
+	kubeconfigPath := getKubeconfigPath()
 
-		fmt.Printf("Using kubeconfig: %s\n", kubeconfigPath)
-		fmt.Print("\nCluster information:\n")
+	fmt.Printf("Using kubeconfig: %s\n", kubeconfigPath)
+	fmt.Print("\nCluster information:\n")
 
-		isSingleNode, clusterInfo, err := machineconfig.IsClusterSingleNode(kubeconfigPath)
-		if err != nil {
-			return fmt.Errorf("failed to detect cluster topology: %w", err)
-		}
+	isSingleNode, clusterInfo, err := machineconfig.IsClusterSingleNode(kubeconfigPath)
+	if err != nil {
+		return fmt.Errorf("failed to detect cluster topology: %w", err)
+	}
 
-		fmt.Println(clusterInfo)
+	fmt.Println(clusterInfo)
 
-		if isSingleNode {
-			fmt.Println("\n⚠️  Single-node or master schedulable cluster detected - will use 'master' role label")
-		} else {
-			fmt.Println("\n✓ Multi-node cluster detected - will use 'worker' role label")
-		}
+	if isSingleNode {
+		fmt.Println("\n⚠️  Single-node or master schedulable cluster detected - will use 'master' role label")
+	} else {
+		fmt.Println("\n✓ Multi-node cluster detected - will use 'worker' role label")
+	}
 
-		// Generate with appropriate role
-		mc, err = generateMachineConfig(isSingleNode, macs, names, policies)
-		if err != nil {
-			return err
-		}
+	// Generate with appropriate role
+	mc, err := generateMachineConfig(isSingleNode, macs, names, policies)
+	if err != nil {
+		return err
+	}
 
-		// Marshal to YAML to show the user
-		yamlData, err := machineconfig.MarshalMachineConfig(mc)
-		if err != nil {
-			return fmt.Errorf("failed to marshal MachineConfig: %w", err)
-		}
+	// Display the MachineConfig
+	if err := displayMachineConfig(mc); err != nil {
+		return err
+	}
 
-		// Display the MachineConfig that will be applied
-		fmt.Println("\n" + strings.Repeat("=", 80))
-		fmt.Println("MachineConfig to be applied:")
-		fmt.Println(strings.Repeat("=", 80))
-		fmt.Println(string(yamlData))
-		fmt.Println(strings.Repeat("=", 80))
-
-		// Ask for confirmation
-		fmt.Print("\nDo you want to apply this MachineConfig to the cluster? (yes/no): ")
-		reader := bufio.NewReader(os.Stdin)
-		response, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read response: %w", err)
-		}
-
-		response = strings.TrimSpace(strings.ToLower(response))
-		if response != "yes" && response != "y" {
-			fmt.Println("Aborted.")
-			return nil
-		}
-
-		// Apply to cluster
-		if err := machineconfig.ApplyMachineConfig(context.Background(), kubeconfigPath, mc); err != nil {
-			return fmt.Errorf("failed to apply MachineConfig: %w", err)
-		}
-
-		fmt.Printf("\n✓ MachineConfig '%s' applied successfully!\n", mc.Metadata.Name)
-		fmt.Println("\nNote: The Machine Config Operator will roll out this change to the nodes.")
-		fmt.Println("This may take several minutes and will cause node reboots.")
-
+	// Ask for confirmation
+	if !confirmApply() {
+		fmt.Println("Aborted.")
 		return nil
 	}
 
-	// Generate without applying
-	mc, err = generateMachineConfig(false, macs, names, policies) // default to worker for file generation
+	// Apply to cluster
+	if err := machineconfig.ApplyMachineConfig(context.Background(), kubeconfigPath, mc); err != nil {
+		return fmt.Errorf("failed to apply MachineConfig: %w", err)
+	}
+
+	fmt.Printf("\n✓ MachineConfig '%s' applied successfully!\n", mc.Metadata.Name)
+	fmt.Println("\nNote: The Machine Config Operator will roll out this change to the nodes.")
+	fmt.Println("This may take several minutes and will cause node reboots.")
+
+	return nil
+}
+
+func displayMachineConfig(mc *machineconfig.MachineConfig) error {
+	yamlData, err := machineconfig.MarshalMachineConfig(mc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal MachineConfig: %w", err)
+	}
+
+	const separatorLength = 80
+	separator := strings.Repeat("=", separatorLength)
+	fmt.Println("\n" + separator)
+	fmt.Println("MachineConfig to be applied:")
+	fmt.Println(separator)
+	fmt.Println(string(yamlData))
+	fmt.Println(separator)
+
+	return nil
+}
+
+func confirmApply() bool {
+	fmt.Print("\nDo you want to apply this MachineConfig to the cluster? (yes/no): ")
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+
+	response = strings.TrimSpace(strings.ToLower(response))
+	return response == "yes" || response == "y"
+}
+
+func generateAndOutput(macs, names, policies []string) error {
+	// Generate without applying (default to worker for file generation)
+	mc, err := generateMachineConfig(false, macs, names, policies)
 	if err != nil {
 		return err
 	}
@@ -162,7 +184,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 	// Output
 	if output != "" {
-		if err := os.WriteFile(output, yamlData, 0600); err != nil {
+		if err := os.WriteFile(output, yamlData, machineconfig.DefaultConfigFileMode); err != nil {
 			return fmt.Errorf("failed to write output file: %w", err)
 		}
 		fmt.Printf("MachineConfig written to: %s\n", output)

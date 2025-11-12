@@ -49,82 +49,78 @@ type Contents struct {
 	Source string `yaml:"source"`
 }
 
+const (
+	// DefaultFileMode is the default permission mode for systemd .link files
+	DefaultFileMode = 0o644
+	// DefaultConfigFileMode is the default permission mode for output config files
+	DefaultConfigFileMode = 0o600
+)
+
 // NewMachineConfigWithNames creates a MachineConfig with explicit interface names using a prefix
+//
 // Deprecated: Use NewMachineConfigWithExplicitNames for more control
 func NewMachineConfigWithNames(name, role string, macAddresses []string, namePrefix string) (*MachineConfig, error) {
 	files := make([]File, 0, len(macAddresses))
-	
+
 	for i, mac := range macAddresses {
 		interfaceName := fmt.Sprintf("%s%d", namePrefix, i)
 		linkFile := generateLinkFileWithName(mac, interfaceName)
-		
-		encodedContent, err := encodeLinkFile(linkFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode link file for MAC %s: %w", mac, err)
-		}
-		
+		encodedContent := encodeLinkFile(linkFile)
+
 		files = append(files, File{
 			Path:      fmt.Sprintf("/etc/systemd/network/10-%s.link", interfaceName),
-			Mode:      0644,
+			Mode:      DefaultFileMode,
 			Overwrite: true,
 			Contents: Contents{
 				Source: encodedContent,
 			},
 		})
 	}
-	
+
 	return createMachineConfig(name, role, files), nil
 }
 
 // NewMachineConfigWithExplicitNames creates a MachineConfig with explicit interface names
 // The names slice must have the same length as macAddresses, and they are matched in order:
 // names[0] will be assigned to the interface with macAddresses[0], etc.
-func NewMachineConfigWithExplicitNames(name, role string, macAddresses []string, names []string) (*MachineConfig, error) {
+func NewMachineConfigWithExplicitNames(name, role string, macAddresses, names []string) (*MachineConfig, error) {
 	if len(macAddresses) != len(names) {
 		return nil, fmt.Errorf("number of MAC addresses (%d) must match number of names (%d)", len(macAddresses), len(names))
 	}
 
 	files := make([]File, 0, len(macAddresses))
-	
+
 	for i, mac := range macAddresses {
 		interfaceName := names[i]
 		linkFile := generateLinkFileWithName(mac, interfaceName)
-		
-		encodedContent, err := encodeLinkFile(linkFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode link file for MAC %s: %w", mac, err)
-		}
-		
+		encodedContent := encodeLinkFile(linkFile)
+
 		files = append(files, File{
 			Path:      fmt.Sprintf("/etc/systemd/network/10-%s.link", interfaceName),
-			Mode:      0644,
+			Mode:      DefaultFileMode,
 			Overwrite: true,
 			Contents: Contents{
 				Source: encodedContent,
 			},
 		})
 	}
-	
+
 	return createMachineConfig(name, role, files), nil
 }
 
 // NewMachineConfigWithPolicy creates a MachineConfig with NamePolicy
-func NewMachineConfigWithPolicy(name, role string, macAddresses []string, namePolicy []string) (*MachineConfig, error) {
+func NewMachineConfigWithPolicy(name, role string, macAddresses, namePolicy []string) (*MachineConfig, error) {
 	files := make([]File, 0, len(macAddresses))
 
 	for _, mac := range macAddresses {
 		linkFile := generateLinkFileWithPolicy(mac, namePolicy)
-
-		encodedContent, err := encodeLinkFile(linkFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode link file for MAC %s: %w", mac, err)
-		}
+		encodedContent := encodeLinkFile(linkFile)
 
 		// Use MAC address in filename to ensure uniqueness
 		safeMac := strings.ReplaceAll(mac, ":", "")
 		files = append(files, File{
 			Path:      fmt.Sprintf("/etc/systemd/network/10-interface-%s.link", safeMac),
-			Mode:      0644,
+			Mode:      DefaultFileMode,
 			Overwrite: true,
 			Contents: Contents{
 				Source: encodedContent,
@@ -177,12 +173,12 @@ NamePolicy=%s
 `, macAddress, policy)
 }
 
-func encodeLinkFile(content string) (string, error) {
+func encodeLinkFile(content string) string {
 	// URL encode the content
 	encoded := url.QueryEscape(content)
 	// Replace + with %20 for proper space encoding
 	encoded = strings.ReplaceAll(encoded, "+", "%20")
-	return "data:text/plain," + encoded, nil
+	return "data:text/plain," + encoded
 }
 
 // MarshalMachineConfig converts a MachineConfig to YAML

@@ -259,10 +259,7 @@ MACAddress=aa:bb:cc:dd:ee:ff
 Name=ptp0
 `
 
-	encoded, err := encodeLinkFile(content)
-	if err != nil {
-		t.Fatalf("encodeLinkFile() error = %v", err)
-	}
+	encoded := encodeLinkFile(content)
 
 	if !strings.HasPrefix(encoded, "data:text/plain,") {
 		t.Error("Expected data:text/plain, prefix")

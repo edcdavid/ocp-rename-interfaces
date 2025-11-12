@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -19,19 +20,19 @@ var machineConfigGVR = schema.GroupVersionResource{
 	Resource: "machineconfigs",
 }
 
+type nodeRoleCounts struct {
+	controlPlane       int
+	workerOnly         int
+	schedulableMasters int
+}
+
 // IsClusterSingleNode detects if the cluster is single-node or compact (schedulable masters)
-func IsClusterSingleNode(kubeconfigPath string) (bool, string, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+func IsClusterSingleNode(kubeconfigPath string) (useMasterRole bool, info string, err error) {
+	clientset, err := getKubernetesClient(kubeconfigPath)
 	if err != nil {
-		return false, "", fmt.Errorf("failed to build config: %w", err)
+		return false, "", err
 	}
 
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return false, "", fmt.Errorf("failed to create clientset: %w", err)
-	}
-
-	// Get all nodes
 	nodes, err := clientset.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		return false, "", fmt.Errorf("failed to list nodes: %w", err)
@@ -41,57 +42,83 @@ func IsClusterSingleNode(kubeconfigPath string) (bool, string, error) {
 		return false, "", fmt.Errorf("no nodes found in cluster")
 	}
 
-	// Build cluster info
-	var info strings.Builder
-	info.WriteString(fmt.Sprintf("  Nodes: %d\n", len(nodes.Items)))
+	counts := countNodeRoles(nodes.Items)
+	info = buildClusterInfo(len(nodes.Items), counts)
+	useMasterRole = shouldUseMasterRole(len(nodes.Items), counts)
 
-	controlPlaneCount := 0
-	workerOnlyCount := 0
-	schedulableMasterCount := 0
+	return useMasterRole, info, nil
+}
 
-	for _, node := range nodes.Items {
-		isMaster := false
-		isWorker := false
+func getKubernetesClient(kubeconfigPath string) (*kubernetes.Clientset, error) {
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build config: %w", err)
+	}
 
-		// Check if it's a control plane/master node
-		if _, ok := node.Labels["node-role.kubernetes.io/master"]; ok {
-			isMaster = true
-			controlPlaneCount++
-		} else if _, ok := node.Labels["node-role.kubernetes.io/control-plane"]; ok {
-			isMaster = true
-			controlPlaneCount++
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create clientset: %w", err)
+	}
+
+	return clientset, nil
+}
+
+func countNodeRoles(nodes []corev1.Node) nodeRoleCounts {
+	counts := nodeRoleCounts{}
+
+	for i := range nodes {
+		node := &nodes[i]
+		isMaster, isWorker := getNodeRoles(node)
+
+		if isMaster {
+			counts.controlPlane++
 		}
 
-		// Check if it's a worker node
-		if _, ok := node.Labels["node-role.kubernetes.io/worker"]; ok {
-			isWorker = true
-		}
-
-		// Count schedulable masters (both master and worker)
 		if isMaster && isWorker {
-			schedulableMasterCount++
+			counts.schedulableMasters++
 		} else if isWorker {
-			workerOnlyCount++
+			counts.workerOnly++
 		}
 	}
 
-	totalWorkers := workerOnlyCount + schedulableMasterCount
+	return counts
+}
 
-	info.WriteString(fmt.Sprintf("  Control Plane Nodes: %d\n", controlPlaneCount))
+func getNodeRoles(node *corev1.Node) (isMaster, isWorker bool) {
+	isMaster = hasLabel(node, "node-role.kubernetes.io/master") ||
+		hasLabel(node, "node-role.kubernetes.io/control-plane")
+	isWorker = hasLabel(node, "node-role.kubernetes.io/worker")
+	return isMaster, isWorker
+}
+
+func hasLabel(node *corev1.Node, label string) bool {
+	_, ok := node.Labels[label]
+	return ok
+}
+
+func buildClusterInfo(totalNodes int, counts nodeRoleCounts) string {
+	var info strings.Builder
+	totalWorkers := counts.workerOnly + counts.schedulableMasters
+
+	info.WriteString(fmt.Sprintf("  Nodes: %d\n", totalNodes))
+	info.WriteString(fmt.Sprintf("  Control Plane Nodes: %d\n", counts.controlPlane))
 	info.WriteString(fmt.Sprintf("  Worker Nodes (total): %d\n", totalWorkers))
-	if schedulableMasterCount > 0 {
-		info.WriteString(fmt.Sprintf("  Schedulable Masters (also workers): %d\n", schedulableMasterCount))
+
+	if counts.schedulableMasters > 0 {
+		info.WriteString(fmt.Sprintf("  Schedulable Masters (also workers): %d\n", counts.schedulableMasters))
 	}
-	if workerOnlyCount > 0 {
-		info.WriteString(fmt.Sprintf("  Dedicated Workers: %d\n", workerOnlyCount))
+	if counts.workerOnly > 0 {
+		info.WriteString(fmt.Sprintf("  Dedicated Workers: %d\n", counts.workerOnly))
 	}
 
+	return info.String()
+}
+
+func shouldUseMasterRole(totalNodes int, counts nodeRoleCounts) bool {
 	// Use master role if:
 	// 1. Single node (1 total node)
 	// 2. Compact cluster (only schedulable masters, no dedicated workers)
-	useMasterRole := len(nodes.Items) == 1 || (schedulableMasterCount > 0 && workerOnlyCount == 0)
-
-	return useMasterRole, info.String(), nil
+	return totalNodes == 1 || (counts.schedulableMasters > 0 && counts.workerOnly == 0)
 }
 
 // ApplyMachineConfig applies a MachineConfig to the cluster
@@ -107,10 +134,7 @@ func ApplyMachineConfig(ctx context.Context, kubeconfigPath string, mc *MachineC
 	}
 
 	// Convert MachineConfig to unstructured
-	unstructuredMC, err := toUnstructured(mc)
-	if err != nil {
-		return fmt.Errorf("failed to convert to unstructured: %w", err)
-	}
+	unstructuredMC := toUnstructured(mc)
 
 	// Try to get existing MachineConfig
 	existing, err := dynamicClient.Resource(machineConfigGVR).Get(ctx, mc.Metadata.Name, metav1.GetOptions{})
@@ -134,7 +158,7 @@ func ApplyMachineConfig(ctx context.Context, kubeconfigPath string, mc *MachineC
 	return nil
 }
 
-func toUnstructured(mc *MachineConfig) (*unstructured.Unstructured, error) {
+func toUnstructured(mc *MachineConfig) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": mc.APIVersion,
@@ -155,7 +179,7 @@ func toUnstructured(mc *MachineConfig) (*unstructured.Unstructured, error) {
 			},
 		},
 	}
-	return obj, nil
+	return obj
 }
 
 func convertFiles(files []File) []interface{} {

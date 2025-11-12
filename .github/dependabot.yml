@@ -1,0 +1,39 @@
+---
+version: 2
+updates:
+  # Go modules dependencies
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      k8s:
+        patterns: ["k8s.io/*", "sigs.k8s.io/*"]
+        update-types: ["major", "minor", "patch"]
+      other-go-modules:
+        patterns: ["*"]
+        exclude-patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+        update-types: ["major", "minor", "patch"]
+
+  # GitHub Actions dependencies
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["actions/*"]
+        update-types: ["major", "minor", "patch"]
+      golangci:
+        patterns: ["golangci/*"]
+        update-types: ["major", "minor", "patch"]
+      other-actions:
+        patterns: ["*"]
+        exclude-patterns:
+          - "actions/*"
+          - "golangci/*"
+        update-types: ["major", "minor", "patch"]
+
