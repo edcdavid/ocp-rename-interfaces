@@ -1,0 +1,191 @@
+package machineconfig
+
+import (
+	"fmt"
+	"net/url"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// MachineConfig represents an OpenShift MachineConfig resource
+type MachineConfig struct {
+	APIVersion string            `yaml:"apiVersion"`
+	Kind       string            `yaml:"kind"`
+	Metadata   Metadata          `yaml:"metadata"`
+	Spec       MachineConfigSpec `yaml:"spec"`
+}
+
+type Metadata struct {
+	Name   string            `yaml:"name"`
+	Labels map[string]string `yaml:"labels"`
+}
+
+type MachineConfigSpec struct {
+	Config Config `yaml:"config"`
+}
+
+type Config struct {
+	Ignition Ignition `yaml:"ignition"`
+	Storage  Storage  `yaml:"storage"`
+}
+
+type Ignition struct {
+	Version string `yaml:"version"`
+}
+
+type Storage struct {
+	Files []File `yaml:"files"`
+}
+
+type File struct {
+	Path      string   `yaml:"path"`
+	Mode      int      `yaml:"mode"`
+	Overwrite bool     `yaml:"overwrite"`
+	Contents  Contents `yaml:"contents"`
+}
+
+type Contents struct {
+	Source string `yaml:"source"`
+}
+
+// NewMachineConfigWithNames creates a MachineConfig with explicit interface names using a prefix
+// Deprecated: Use NewMachineConfigWithExplicitNames for more control
+func NewMachineConfigWithNames(name, role string, macAddresses []string, namePrefix string) (*MachineConfig, error) {
+	files := make([]File, 0, len(macAddresses))
+	
+	for i, mac := range macAddresses {
+		interfaceName := fmt.Sprintf("%s%d", namePrefix, i)
+		linkFile := generateLinkFileWithName(mac, interfaceName)
+		
+		encodedContent, err := encodeLinkFile(linkFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode link file for MAC %s: %w", mac, err)
+		}
+		
+		files = append(files, File{
+			Path:      fmt.Sprintf("/etc/systemd/network/10-%s.link", interfaceName),
+			Mode:      0644,
+			Overwrite: true,
+			Contents: Contents{
+				Source: encodedContent,
+			},
+		})
+	}
+	
+	return createMachineConfig(name, role, files), nil
+}
+
+// NewMachineConfigWithExplicitNames creates a MachineConfig with explicit interface names
+// The names slice must have the same length as macAddresses, and they are matched in order:
+// names[0] will be assigned to the interface with macAddresses[0], etc.
+func NewMachineConfigWithExplicitNames(name, role string, macAddresses []string, names []string) (*MachineConfig, error) {
+	if len(macAddresses) != len(names) {
+		return nil, fmt.Errorf("number of MAC addresses (%d) must match number of names (%d)", len(macAddresses), len(names))
+	}
+
+	files := make([]File, 0, len(macAddresses))
+	
+	for i, mac := range macAddresses {
+		interfaceName := names[i]
+		linkFile := generateLinkFileWithName(mac, interfaceName)
+		
+		encodedContent, err := encodeLinkFile(linkFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode link file for MAC %s: %w", mac, err)
+		}
+		
+		files = append(files, File{
+			Path:      fmt.Sprintf("/etc/systemd/network/10-%s.link", interfaceName),
+			Mode:      0644,
+			Overwrite: true,
+			Contents: Contents{
+				Source: encodedContent,
+			},
+		})
+	}
+	
+	return createMachineConfig(name, role, files), nil
+}
+
+// NewMachineConfigWithPolicy creates a MachineConfig with NamePolicy
+func NewMachineConfigWithPolicy(name, role string, macAddresses []string, namePolicy []string) (*MachineConfig, error) {
+	files := make([]File, 0, len(macAddresses))
+
+	for _, mac := range macAddresses {
+		linkFile := generateLinkFileWithPolicy(mac, namePolicy)
+
+		encodedContent, err := encodeLinkFile(linkFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode link file for MAC %s: %w", mac, err)
+		}
+
+		// Use MAC address in filename to ensure uniqueness
+		safeMac := strings.ReplaceAll(mac, ":", "")
+		files = append(files, File{
+			Path:      fmt.Sprintf("/etc/systemd/network/10-interface-%s.link", safeMac),
+			Mode:      0644,
+			Overwrite: true,
+			Contents: Contents{
+				Source: encodedContent,
+			},
+		})
+	}
+
+	return createMachineConfig(name, role, files), nil
+}
+
+func createMachineConfig(name, role string, files []File) *MachineConfig {
+	return &MachineConfig{
+		APIVersion: "machineconfiguration.openshift.io/v1",
+		Kind:       "MachineConfig",
+		Metadata: Metadata{
+			Name: name,
+			Labels: map[string]string{
+				"machineconfiguration.openshift.io/role": role,
+			},
+		},
+		Spec: MachineConfigSpec{
+			Config: Config{
+				Ignition: Ignition{
+					Version: "3.2.0",
+				},
+				Storage: Storage{
+					Files: files,
+				},
+			},
+		},
+	}
+}
+
+func generateLinkFileWithName(macAddress, interfaceName string) string {
+	return fmt.Sprintf(`[Match]
+MACAddress=%s
+
+[Link]
+Name=%s
+`, macAddress, interfaceName)
+}
+
+func generateLinkFileWithPolicy(macAddress string, namePolicy []string) string {
+	policy := strings.Join(namePolicy, " ")
+	return fmt.Sprintf(`[Match]
+MACAddress=%s
+
+[Link]
+NamePolicy=%s
+`, macAddress, policy)
+}
+
+func encodeLinkFile(content string) (string, error) {
+	// URL encode the content
+	encoded := url.QueryEscape(content)
+	// Replace + with %20 for proper space encoding
+	encoded = strings.ReplaceAll(encoded, "+", "%20")
+	return "data:text/plain," + encoded, nil
+}
+
+// MarshalMachineConfig converts a MachineConfig to YAML
+func MarshalMachineConfig(mc *MachineConfig) ([]byte, error) {
+	return yaml.Marshal(mc)
+}
