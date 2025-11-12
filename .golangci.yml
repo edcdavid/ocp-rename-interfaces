@@ -1,89 +1,40 @@
+version: "2"
+
 linters-settings:
-  dupl:
-    threshold: 100
-  funlen:
-    lines: 100
-    statements: 50
-  gci:
-    local-prefixes: github.com/deliedit/ocp-rename-interfaces
-  goconst:
-    min-len: 2
-    min-occurrences: 2
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-    disabled-checks:
-      - dupImport
-      - ifElseChain
-      - octalLiteral
-      - whyNoLint
-      - wrapperFunc
+  govet:
+    enable:
+      - shadow
   gocyclo:
     min-complexity: 15
-  goimports:
-    local-prefixes: github.com/deliedit/ocp-rename-interfaces
-  gomnd:
-    settings:
-      mnd:
-        checks: argument,case,condition,return
-  govet:
-    check-shadowing: true
-  lll:
-    line-length: 140
   misspell:
     locale: US
-  nolintlint:
-    allow-leading-space: true
-    allow-unused: false
-    require-explanation: false
-    require-specific: false
+  dupl:
+    threshold: 100
 
 linters:
   disable-all: true
   enable:
-    - bodyclose
-    - dogsled
-    - dupl
+    # Enabled by default
     - errcheck
-    - exportloopref
-    - funlen
-    - gochecknoinits
-    - goconst
-    - gocritic
-    - gocyclo
-    - gofmt
-    - goimports
-    - gomnd
-    - goprintffuncname
-    - gosec
-    - gosimple
     - govet
     - ineffassign
-    - lll
+    - staticcheck
+    - unused
+    # Additional useful linters
+    - bodyclose
+    - dupl
+    - gocyclo
+    - gocritic
+    - gosec
     - misspell
     - nakedret
-    - noctx
-    - nolintlint
-    - staticcheck
-    - stylecheck
-    - typecheck
-    - unconvert
-    - unparam
-    - unused
-    - whitespace
 
 issues:
   exclude-rules:
     - path: _test\.go
       linters:
-        - gomnd
-        - funlen
-        - goconst
+        - errcheck
+        - dupl
 
 run:
   timeout: 5m
-

@@ -12,13 +12,13 @@ import (
 )
 
 var (
-	macAddresses     string
-	namePolicies     string
-	interfaceNames   string
-	kubeconfig       string
-	output           string
-	apply            bool
-	mcName           string
+	macAddresses   string
+	namePolicies   string
+	interfaceNames string
+	kubeconfig     string
+	output         string
+	apply          bool
+	mcName         string
 )
 
 var rootCmd = &cobra.Command{
@@ -39,7 +39,8 @@ func init() {
 	rootCmd.Flags().BoolVarP(&apply, "apply", "a", false, "Apply the MachineConfig to the cluster")
 	rootCmd.Flags().StringVar(&mcName, "mc-name", "50-interface-rename", "Name of the MachineConfig resource")
 
-	rootCmd.MarkFlagRequired("macs")
+	// Mark required flags - error is handled by cobra during execution
+	_ = rootCmd.MarkFlagRequired("macs")
 }
 
 func Execute() error {
@@ -148,7 +149,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 	// Output
 	if output != "" {
-		if err := os.WriteFile(output, yamlData, 0644); err != nil {
+		if err := os.WriteFile(output, yamlData, 0600); err != nil {
 			return fmt.Errorf("failed to write output file: %w", err)
 		}
 		fmt.Printf("MachineConfig written to: %s\n", output)
@@ -168,7 +169,7 @@ func generateMachineConfig(isSingleNode bool, macs, names, policies []string) (*
 	if len(names) > 0 {
 		return machineconfig.NewMachineConfigWithExplicitNames(mcName, role, macs, names)
 	}
-	
+
 	return machineconfig.NewMachineConfigWithPolicy(mcName, role, macs, policies)
 }
 
@@ -177,17 +178,17 @@ func parseMACAddresses(input string) []string {
 	if input == "" {
 		return []string{}
 	}
-	
+
 	parts := strings.Split(input, ",")
 	result := make([]string, 0, len(parts))
-	
+
 	for _, part := range parts {
 		trimmed := strings.TrimSpace(part)
 		if trimmed != "" {
 			result = append(result, trimmed)
 		}
 	}
-	
+
 	return result
 }
 
@@ -196,17 +197,17 @@ func parseCommaSeparated(input string) []string {
 	if input == "" {
 		return []string{}
 	}
-	
+
 	parts := strings.Split(input, ",")
 	result := make([]string, 0, len(parts))
-	
+
 	for _, part := range parts {
 		trimmed := strings.TrimSpace(part)
 		if trimmed != "" {
 			result = append(result, trimmed)
 		}
 	}
-	
+
 	return result
 }
 
