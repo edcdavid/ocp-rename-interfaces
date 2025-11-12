@@ -1,0 +1,59 @@
+name: Release Binaries
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build cross-platform binaries
+        run: |
+          set -e
+          mkdir -p dist
+          # Build for all Go-supported targets except mobile/web (which need special handling)
+          for target in $(go tool dist list); do
+            case "$target" in
+              android/*|ios/*|js/*|wasip1/*)
+                echo "Skipping $target (non-CLI target)"
+                continue
+                ;;
+            esac
+            GOOS=${target%/*}
+            GOARCH=${target#*/}
+            EXT=""
+            if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
+            echo "Building for $GOOS/$GOARCH"
+            if CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "-s -w -X main.Version=${GITHUB_REF#refs/tags/}" -o "dist/ocp-rename-interfaces_${GOOS}_${GOARCH}${EXT}" .; then
+              echo "Built: dist/ocp-rename-interfaces_${GOOS}_${GOARCH}${EXT}"
+            else
+              echo "Skipping $GOOS/$GOARCH (build failed)"
+              rm -f "dist/ocp-rename-interfaces_${GOOS}_${GOARCH}${EXT}" || true
+            fi
+          done
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Upload binaries to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

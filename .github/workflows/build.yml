@@ -51,13 +51,6 @@ jobs:
     name: Build
     needs: [lint, test]
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux, darwin, windows]
-        goarch: [amd64, arm64]
-        exclude:
-          - goos: windows
-            goarch: arm64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -67,54 +60,12 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Get version
-        id: get_version
-        run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/}
-          else
-            VERSION=$(git describe --tags --always --dirty)
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
       - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          VERSION: ${{ steps.get_version.outputs.VERSION }}
-        run: |
-          BINARY_NAME=ocp-rename-interfaces-${{ matrix.goos }}-${{ matrix.goarch }}
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_NAME="${BINARY_NAME}.exe"
-          fi
-          mkdir -p bin
-          go build -ldflags "-X main.Version=${VERSION}" -o bin/${BINARY_NAME} .
+        run: make build
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: ocp-rename-interfaces-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: ocp-rename-interfaces
           path: bin/*
-
-  release:
-    name: Release
-    needs: [build]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v3
-        with:
-          path: artifacts
-
-      - name: Create release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: artifacts/**/*
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
