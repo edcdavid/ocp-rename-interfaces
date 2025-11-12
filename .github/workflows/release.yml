@@ -10,6 +10,17 @@ permissions:
 jobs:
   build-and-upload:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,41 +30,50 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build cross-platform binaries
+      - name: Build binary for ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
           set -e
           mkdir -p dist
-          # Build for all Go-supported targets except mobile/web (which need special handling)
-          for target in $(go tool dist list); do
-            case "$target" in
-              android/*|ios/*|js/*|wasip1/*)
-                echo "Skipping $target (non-CLI target)"
-                continue
-                ;;
-            esac
-            GOOS=${target%/*}
-            GOARCH=${target#*/}
-            EXT=""
-            if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
-            echo "Building for $GOOS/$GOARCH"
-            if CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "-s -w -X main.Version=${GITHUB_REF#refs/tags/}" -o "dist/ocp-rename-interfaces_${GOOS}_${GOARCH}${EXT}" .; then
-              echo "Built: dist/ocp-rename-interfaces_${GOOS}_${GOARCH}${EXT}"
-            else
-              echo "Skipping $GOOS/$GOARCH (build failed)"
-              rm -f "dist/ocp-rename-interfaces_${GOOS}_${GOARCH}${EXT}" || true
-            fi
-          done
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
+          BINARY_NAME="ocp-rename-interfaces_${{ matrix.goos }}_${{ matrix.goarch }}${EXT}"
+          echo "Building $BINARY_NAME"
+          CGO_ENABLED=0 go build -ldflags "-s -w -X main.Version=${GITHUB_REF#refs/tags/}" -o "dist/${BINARY_NAME}" .
+          echo "Built: dist/${BINARY_NAME}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ocp-rename-interfaces-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+
+  create-release:
+    name: Create Release
+    needs: [build-and-upload]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
 
       - name: Generate checksums
         run: |
-          cd dist
+          cd artifacts
           sha256sum * > checksums.txt
           cat checksums.txt
 
       - name: Upload binaries to the release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
