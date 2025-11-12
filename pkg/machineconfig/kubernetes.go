@@ -19,7 +19,7 @@ var machineConfigGVR = schema.GroupVersionResource{
 	Resource: "machineconfigs",
 }
 
-// IsClusterSingleNode detects if the cluster is single-node
+// IsClusterSingleNode detects if the cluster is single-node or compact (schedulable masters)
 func IsClusterSingleNode(kubeconfigPath string) (bool, string, error) {
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
@@ -46,26 +46,52 @@ func IsClusterSingleNode(kubeconfigPath string) (bool, string, error) {
 	info.WriteString(fmt.Sprintf("  Nodes: %d\n", len(nodes.Items)))
 
 	controlPlaneCount := 0
-	workerCount := 0
+	workerOnlyCount := 0
+	schedulableMasterCount := 0
 
 	for _, node := range nodes.Items {
+		isMaster := false
+		isWorker := false
+
+		// Check if it's a control plane/master node
 		if _, ok := node.Labels["node-role.kubernetes.io/master"]; ok {
+			isMaster = true
 			controlPlaneCount++
 		} else if _, ok := node.Labels["node-role.kubernetes.io/control-plane"]; ok {
+			isMaster = true
 			controlPlaneCount++
 		}
+
+		// Check if it's a worker node
 		if _, ok := node.Labels["node-role.kubernetes.io/worker"]; ok {
-			workerCount++
+			isWorker = true
+		}
+
+		// Count schedulable masters (both master and worker)
+		if isMaster && isWorker {
+			schedulableMasterCount++
+		} else if isWorker {
+			workerOnlyCount++
 		}
 	}
 
+	totalWorkers := workerOnlyCount + schedulableMasterCount
+
 	info.WriteString(fmt.Sprintf("  Control Plane Nodes: %d\n", controlPlaneCount))
-	info.WriteString(fmt.Sprintf("  Worker Nodes: %d\n", workerCount))
+	info.WriteString(fmt.Sprintf("  Worker Nodes (total): %d\n", totalWorkers))
+	if schedulableMasterCount > 0 {
+		info.WriteString(fmt.Sprintf("  Schedulable Masters (also workers): %d\n", schedulableMasterCount))
+	}
+	if workerOnlyCount > 0 {
+		info.WriteString(fmt.Sprintf("  Dedicated Workers: %d\n", workerOnlyCount))
+	}
 
-	// Single-node if we have 1 node total OR if we have control plane but no dedicated workers
-	isSingleNode := len(nodes.Items) == 1 || (controlPlaneCount > 0 && workerCount == 0 && len(nodes.Items) == controlPlaneCount)
+	// Use master role if:
+	// 1. Single node (1 total node)
+	// 2. Compact cluster (only schedulable masters, no dedicated workers)
+	useMasterRole := len(nodes.Items) == 1 || (schedulableMasterCount > 0 && workerOnlyCount == 0)
 
-	return isSingleNode, info.String(), nil
+	return useMasterRole, info.String(), nil
 }
 
 // ApplyMachineConfig applies a MachineConfig to the cluster

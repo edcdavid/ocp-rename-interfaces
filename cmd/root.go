@@ -98,10 +98,29 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		fmt.Println(clusterInfo)
 
 		if isSingleNode {
-			fmt.Println("\n⚠️  Single-node cluster detected - will use 'master' role label")
+			fmt.Println("\n⚠️  Single-node or master schedulable cluster detected - will use 'master' role label")
 		} else {
 			fmt.Println("\n✓ Multi-node cluster detected - will use 'worker' role label")
 		}
+
+		// Generate with appropriate role
+		mc, err = generateMachineConfig(isSingleNode, macs, names, policies)
+		if err != nil {
+			return err
+		}
+
+		// Marshal to YAML to show the user
+		yamlData, err := machineconfig.MarshalMachineConfig(mc)
+		if err != nil {
+			return fmt.Errorf("failed to marshal MachineConfig: %w", err)
+		}
+
+		// Display the MachineConfig that will be applied
+		fmt.Println("\n" + strings.Repeat("=", 80))
+		fmt.Println("MachineConfig to be applied:")
+		fmt.Println(strings.Repeat("=", 80))
+		fmt.Println(string(yamlData))
+		fmt.Println(strings.Repeat("=", 80))
 
 		// Ask for confirmation
 		fmt.Print("\nDo you want to apply this MachineConfig to the cluster? (yes/no): ")
@@ -115,12 +134,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		if response != "yes" && response != "y" {
 			fmt.Println("Aborted.")
 			return nil
-		}
-
-		// Generate with appropriate role
-		mc, err = generateMachineConfig(isSingleNode, macs, names, policies)
-		if err != nil {
-			return err
 		}
 
 		// Apply to cluster
