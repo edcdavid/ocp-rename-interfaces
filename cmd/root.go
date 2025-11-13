@@ -13,7 +13,7 @@ import (
 
 var (
 	macAddresses   string
-	namePolicies   string
+	namePolicy     string
 	interfaceNames string
 	kubeconfig     string
 	output         string
@@ -32,7 +32,7 @@ renaming and explicit interface naming.`,
 
 func init() {
 	rootCmd.Flags().StringVarP(&macAddresses, "macs", "m", "", "Comma-separated list of MAC addresses (e.g., aa:bb:cc:dd:ee:ff,11:22:33:44:55:66)")
-	rootCmd.Flags().StringVarP(&namePolicies, "name-policies", "p", "", "Comma-separated list of NamePolicy schemes (e.g., slot,path,onboard)")
+	rootCmd.Flags().StringVarP(&namePolicy, "name-policy", "p", "", "Single NamePolicy scheme (e.g., slot, path, onboard, mac, keep)")
 	rootCmd.Flags().StringVarP(&interfaceNames, "names", "n", "", "Comma-separated list of interface names (e.g., ptp0,ptp1). Must match number of MACs.")
 	rootCmd.Flags().StringVarP(&kubeconfig, "kubeconfig", "k", "", "Path to kubeconfig file (uses KUBECONFIG env or ~/.kube/config if not specified)")
 	rootCmd.Flags().StringVarP(&output, "output", "o", "", "Output file path (prints to stdout if not specified)")
@@ -48,51 +48,49 @@ func Execute() error {
 }
 
 func runRoot(cmd *cobra.Command, args []string) error {
-	macs, names, policies, err := parseAndValidateFlags()
+	macs, names, policy, err := parseAndValidateFlags()
 	if err != nil {
 		return err
 	}
 
 	if apply {
-		return applyToCluster(macs, names, policies)
+		return applyToCluster(macs, names, policy)
 	}
 
-	return generateAndOutput(macs, names, policies)
+	return generateAndOutput(macs, names, policy)
 }
 
-func parseAndValidateFlags() (macs, names, policies []string, err error) {
+func parseAndValidateFlags() (macs, names []string, policy string, err error) {
 	// Parse comma-separated MAC addresses
 	macs = parseMACAddresses(macAddresses)
 	if len(macs) == 0 {
-		return nil, nil, nil, fmt.Errorf("at least one MAC address must be specified")
+		return nil, nil, "", fmt.Errorf("at least one MAC address must be specified")
 	}
 
 	// Parse naming options
-	if namePolicies != "" {
-		policies = parseCommaSeparated(namePolicies)
-	}
+	policy = strings.TrimSpace(namePolicy)
 	if interfaceNames != "" {
 		names = parseCommaSeparated(interfaceNames)
 	}
 
 	// Validate inputs
-	if len(policies) == 0 && len(names) == 0 {
-		return nil, nil, nil, fmt.Errorf("either --name-policies or --names must be specified")
+	if policy == "" && len(names) == 0 {
+		return nil, nil, "", fmt.Errorf("either --name-policy or --names must be specified")
 	}
 
-	if len(policies) > 0 && len(names) > 0 {
-		return nil, nil, nil, fmt.Errorf("--name-policies and --names are mutually exclusive")
+	if policy != "" && len(names) > 0 {
+		return nil, nil, "", fmt.Errorf("--name-policy and --names are mutually exclusive")
 	}
 
 	// If using --names, count must match MACs count
 	if len(names) > 0 && len(names) != len(macs) {
-		return nil, nil, nil, fmt.Errorf("number of names (%d) must match number of MAC addresses (%d)", len(names), len(macs))
+		return nil, nil, "", fmt.Errorf("number of names (%d) must match number of MAC addresses (%d)", len(names), len(macs))
 	}
 
-	return macs, names, policies, nil
+	return macs, names, policy, nil
 }
 
-func applyToCluster(macs, names, policies []string) error {
+func applyToCluster(macs, names []string, policy string) error {
 	kubeconfigPath := getKubeconfigPath()
 
 	fmt.Printf("Using kubeconfig: %s\n", kubeconfigPath)
@@ -112,7 +110,7 @@ func applyToCluster(macs, names, policies []string) error {
 	}
 
 	// Generate with appropriate role
-	mc, err := generateMachineConfig(isSingleNode, macs, names, policies)
+	mc, err := generateMachineConfig(isSingleNode, macs, names, policy)
 	if err != nil {
 		return err
 	}
@@ -169,9 +167,9 @@ func confirmApply() bool {
 	return response == "yes" || response == "y"
 }
 
-func generateAndOutput(macs, names, policies []string) error {
+func generateAndOutput(macs, names []string, policy string) error {
 	// Generate without applying (default to worker for file generation)
-	mc, err := generateMachineConfig(false, macs, names, policies)
+	mc, err := generateMachineConfig(false, macs, names, policy)
 	if err != nil {
 		return err
 	}
@@ -195,7 +193,7 @@ func generateAndOutput(macs, names, policies []string) error {
 	return nil
 }
 
-func generateMachineConfig(isSingleNode bool, macs, names, policies []string) (*machineconfig.MachineConfig, error) {
+func generateMachineConfig(isSingleNode bool, macs, names []string, policy string) (*machineconfig.MachineConfig, error) {
 	role := "worker"
 	if isSingleNode {
 		role = "master"
@@ -205,7 +203,7 @@ func generateMachineConfig(isSingleNode bool, macs, names, policies []string) (*
 		return machineconfig.NewMachineConfigWithExplicitNames(mcName, role, macs, names)
 	}
 
-	return machineconfig.NewMachineConfigWithPolicy(mcName, role, macs, policies)
+	return machineconfig.NewMachineConfigWithPolicy(mcName, role, macs, policy)
 }
 
 // parseMACAddresses parses comma-separated MAC addresses and trims whitespace

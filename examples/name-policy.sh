@@ -3,7 +3,7 @@
 
 ./bin/ocp-rename-interfaces \
   --macs "cc:aa:aa:aa:df:01" \
-  --name-policies "slot,path,onboard" \
+  --name-policy "slot" \
   --mc-name "50-interface-namepolicy" \
   --output "name-policy.yaml"
 

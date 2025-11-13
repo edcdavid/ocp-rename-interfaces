@@ -10,7 +10,7 @@
 #   ./bin/ocp-rename-interfaces --macs "<MAC1>,<MAC2>,<MAC3>" --names "ptp0,ptp1,ptp2" --output config.yaml
 #
 # Using NamePolicy instead of explicit names:
-#   ./bin/ocp-rename-interfaces --macs "<MAC>" --name-policies "slot,path,onboard" --output config.yaml
+#   ./bin/ocp-rename-interfaces --macs "<MAC>" --name-policy "slot" --output config.yaml
 #
 apiVersion: machineconfiguration.openshift.io/v1
 kind: MachineConfig
@@ -24,9 +24,12 @@ spec:
       version: 3.2.0
     storage:
       files:
-      # Rename interface with MAC cc:aa:aa:aa:df:01 to ptp0
       - path: /etc/systemd/network/10-ptp0.link
-        mode: 420  # 0644 in octal
+        # [Match]
+        # MACAddress=cc:aa:aa:aa:df:01
+        # [Link]
+        # Name=ptp0
+        mode: 420
         overwrite: true
         contents:
           source: data:text/plain,%5BMatch%5D%0AMACAddress%3Dcc%3Aaa%3Aaa%3Aaa%3Adf%3A01%0A%0A%5BLink%5D%0AName%3Dptp0%0A

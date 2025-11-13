@@ -169,7 +169,7 @@ func TestNewMachineConfigWithPolicy(t *testing.T) {
 		mcName        string
 		role          string
 		macAddresses  []string
-		namePolicy    []string
+		namePolicy    string
 		expectedFiles int
 	}{
 		{
@@ -177,16 +177,24 @@ func TestNewMachineConfigWithPolicy(t *testing.T) {
 			mcName:        "test-mc",
 			role:          "worker",
 			macAddresses:  []string{"aa:bb:cc:dd:ee:ff"},
-			namePolicy:    []string{"slot"},
+			namePolicy:    "slot",
 			expectedFiles: 1,
 		},
 		{
-			name:          "Multiple policies",
+			name:          "Path policy",
 			mcName:        "test-mc",
 			role:          "worker",
 			macAddresses:  []string{"aa:bb:cc:dd:ee:ff"},
-			namePolicy:    []string{"slot", "path", "onboard"},
+			namePolicy:    "path",
 			expectedFiles: 1,
+		},
+		{
+			name:          "Multiple interfaces same policy",
+			mcName:        "test-mc",
+			role:          "master",
+			macAddresses:  []string{"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"},
+			namePolicy:    "slot",
+			expectedFiles: 2,
 		},
 	}
 
@@ -205,6 +213,9 @@ func TestNewMachineConfigWithPolicy(t *testing.T) {
 			for _, file := range mc.Spec.Config.Storage.Files {
 				if !strings.Contains(file.Contents.Source, "NamePolicy") {
 					t.Errorf("Expected NamePolicy in source, got %s", file.Contents.Source)
+				}
+				if !strings.Contains(file.Contents.Source, tt.namePolicy) {
+					t.Errorf("Expected policy %s in source", tt.namePolicy)
 				}
 			}
 		})
@@ -233,7 +244,7 @@ func TestGenerateLinkFileWithName(t *testing.T) {
 
 func TestGenerateLinkFileWithPolicy(t *testing.T) {
 	mac := "aa:bb:cc:dd:ee:ff"
-	policy := []string{"slot", "path"}
+	policy := "slot"
 
 	result := generateLinkFileWithPolicy(mac, policy)
 
@@ -246,7 +257,7 @@ func TestGenerateLinkFileWithPolicy(t *testing.T) {
 	if !strings.Contains(result, "[Link]") {
 		t.Error("Expected [Link] section")
 	}
-	if !strings.Contains(result, "NamePolicy=slot path") {
+	if !strings.Contains(result, "NamePolicy=slot") {
 		t.Error("Expected NamePolicy in result")
 	}
 }

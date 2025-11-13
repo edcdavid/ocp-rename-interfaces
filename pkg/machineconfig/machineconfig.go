@@ -43,6 +43,7 @@ type File struct {
 	Mode      int      `yaml:"mode"`
 	Overwrite bool     `yaml:"overwrite"`
 	Contents  Contents `yaml:"contents"`
+	Comment   string   `yaml:"-"` // Not serialized to YAML, only used for generating comments
 }
 
 type Contents struct {
@@ -102,6 +103,7 @@ func NewMachineConfigWithExplicitNames(name, role string, macAddresses, names []
 			Contents: Contents{
 				Source: encodedContent,
 			},
+			Comment: linkFile, // Store decoded content for YAML comment
 		})
 	}
 
@@ -109,7 +111,7 @@ func NewMachineConfigWithExplicitNames(name, role string, macAddresses, names []
 }
 
 // NewMachineConfigWithPolicy creates a MachineConfig with NamePolicy
-func NewMachineConfigWithPolicy(name, role string, macAddresses, namePolicy []string) (*MachineConfig, error) {
+func NewMachineConfigWithPolicy(name, role string, macAddresses []string, namePolicy string) (*MachineConfig, error) {
 	files := make([]File, 0, len(macAddresses))
 
 	for _, mac := range macAddresses {
@@ -125,6 +127,7 @@ func NewMachineConfigWithPolicy(name, role string, macAddresses, namePolicy []st
 			Contents: Contents{
 				Source: encodedContent,
 			},
+			Comment: linkFile, // Store decoded content for YAML comment
 		})
 	}
 
@@ -163,14 +166,13 @@ Name=%s
 `, macAddress, interfaceName)
 }
 
-func generateLinkFileWithPolicy(macAddress string, namePolicy []string) string {
-	policy := strings.Join(namePolicy, " ")
+func generateLinkFileWithPolicy(macAddress, namePolicy string) string {
 	return fmt.Sprintf(`[Match]
 MACAddress=%s
 
 [Link]
 NamePolicy=%s
-`, macAddress, policy)
+`, macAddress, namePolicy)
 }
 
 func encodeLinkFile(content string) string {
@@ -181,7 +183,49 @@ func encodeLinkFile(content string) string {
 	return "data:text/plain," + encoded
 }
 
-// MarshalMachineConfig converts a MachineConfig to YAML
+// MarshalMachineConfig converts a MachineConfig to YAML with comments showing decoded content
 func MarshalMachineConfig(mc *MachineConfig) ([]byte, error) {
-	return yaml.Marshal(mc)
+	data, err := yaml.Marshal(mc)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add comments with decoded link file content
+	result := addLinkFileComments(string(data), mc)
+	return []byte(result), nil
+}
+
+func addLinkFileComments(yamlContent string, mc *MachineConfig) string {
+	lines := strings.Split(yamlContent, "\n")
+	var result strings.Builder
+
+	fileIndex := 0
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		result.WriteString(line)
+		result.WriteString("\n")
+
+		// Detect when we're entering a file entry
+		if strings.Contains(line, "- path: /etc/systemd/network/") && fileIndex < len(mc.Spec.Config.Storage.Files) {
+			file := mc.Spec.Config.Storage.Files[fileIndex]
+
+			// Add comment with decoded content after the path line
+			if file.Comment != "" {
+				// Add indented comment block
+				commentLines := strings.Split(file.Comment, "\n")
+				for _, commentLine := range commentLines {
+					if commentLine != "" {
+						result.WriteString("          # ")
+						result.WriteString(commentLine)
+						result.WriteString("\n")
+					}
+				}
+			}
+
+			fileIndex++
+		}
+	}
+
+	return result.String()
 }
