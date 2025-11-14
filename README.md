@@ -6,6 +6,8 @@ A Go-based CLI tool to generate and apply OpenShift MachineConfig resources for 
 
 - 🎯 Generate MachineConfig YAML for network interface renaming
 - 🔄 Support for both explicit interface naming and systemd NamePolicy
+- 🔌 Match interfaces by MAC address or vendor/model ID
+- 🔍 Auto-detect vendor/model IDs from existing interfaces using udevadm
 - 🎭 Automatic detection of single-node vs multi-node clusters
 - ✅ Interactive confirmation before applying to cluster
 - 🌐 Direct application to OpenShift clusters via kubeconfig
@@ -52,11 +54,53 @@ Use systemd's naming schemes instead of explicit names:
 ```bash
 ocp-rename-interfaces \
   --macs "cc:aa:aa:aa:df:01" \
-  --name-policies "slot,path,onboard" \
+  --name-policy "slot" \
   --output interface-config.yaml
 ```
 
-This creates systemd `.link` files that apply the `slot path onboard` NamePolicy to matched interfaces.
+This creates systemd `.link` files that apply the `slot` NamePolicy to matched interfaces.
+
+### Match by Vendor/Model ID (Manual)
+
+Match interfaces based on their PCI vendor and model IDs instead of MAC addresses:
+
+```bash
+ocp-rename-interfaces \
+  --vendor "0x8086" \
+  --model "0x153a" \
+  --names "ptp0" \
+  --output interface-config.yaml
+```
+
+This matches any Intel (0x8086) I211 (0x153a) network card and renames it to `ptp0`.
+
+### Auto-detect Vendor/Model ID (Local Machine)
+
+Automatically detect vendor and model IDs from a local interface (requires `udevadm` on Linux):
+
+```bash
+ocp-rename-interfaces \
+  --refIfName "enp0s3" \
+  --names "ptp0" \
+  --output interface-config.yaml
+```
+
+This runs `udevadm info -q property -p /sys/class/net/enp0s3` to extract the vendor and model IDs.
+
+### Auto-detect from Cluster Node
+
+Automatically detect vendor and model IDs from an interface on a cluster node (requires `oc` CLI and cluster access):
+
+```bash
+ocp-rename-interfaces \
+  --refIfName "eno1" \
+  --node "worker-0" \
+  --kubeconfig ~/.kube/config \
+  --names "ptp0" \
+  --output interface-config.yaml
+```
+
+This runs `oc debug node/worker-0 -- chroot /host udevadm info -q property -p /sys/class/net/eno1` to extract the vendor and model IDs from the cluster node, then generates a MachineConfig that will match any interface with the same hardware.
 
 ### Apply Directly to Cluster
 
@@ -80,17 +124,32 @@ The tool will:
 
 | Flag | Short | Description | Required |
 |------|-------|-------------|----------|
-| `--macs` | `-m` | Comma-separated list of MAC addresses | Yes |
+| `--macs` | `-m` | Comma-separated list of MAC addresses | ** |
+| `--vendor` | | Vendor ID in hex format (e.g., 0x8086) | ** |
+| `--model` | | Model ID in hex format (e.g., 0x153a) | ** |
+| `--refIfName` | | Reference interface to auto-detect vendor/model IDs | ** |
+| `--node` | | Node name for remote detection (use with --refIfName) | No |
 | `--names` | `-n` | Comma-separated list of interface names (must match number of MACs) | * |
-| `--name-policies` | `-p` | Comma-separated list of NamePolicy schemes (e.g., slot,path,onboard) | * |
+| `--name-policy` | `-p` | NamePolicy scheme (e.g., slot, path, onboard, mac, keep) | * |
 | `--kubeconfig` | `-k` | Path to kubeconfig file | No |
 | `--output` | `-o` | Output file path (stdout if not specified) | No |
 | `--apply` | `-a` | Apply MachineConfig to cluster | No |
 | `--mc-name` | | MachineConfig resource name (default: 50-interface-rename) | No |
 
-\* Either `--names` or `--name-policies` must be specified (mutually exclusive)
+\* Either `--names` or `--name-policy` must be specified (mutually exclusive)
 
-**Note:** When using `--names`, the number of names must exactly match the number of MACs. They are matched in order: the first name is assigned to the interface with the first MAC address, and so on.
+\*\* At least one matching method must be specified:
+  - `--macs` for MAC address matching
+  - `--vendor` and `--model` together for property-based matching
+  - `--refIfName` for auto-detection of vendor/model IDs (cannot be combined with `--vendor`/`--model`)
+
+**Matching Notes:**
+- When using `--macs` with `--names`, the number of names must match the number of MACs (matched in order)
+- When using `--vendor`/`--model`, only one interface name can be specified (all matching interfaces get the same name)
+- `--refIfName` cannot be combined with manual `--vendor`/`--model`
+- `--refIfName` without `--node`: Detects from local machine (requires `udevadm` on Linux)
+- `--refIfName` with `--node`: Detects from cluster node (requires `oc` CLI and `--kubeconfig`)
+- `--node` requires `--refIfName` and `--kubeconfig`
 
 ## Examples
 
@@ -157,6 +216,47 @@ ocp-rename-interfaces \
   --names "timing1,sync2,clock3" \
   --output custom-names.yaml
 ```
+
+### Example 5: Vendor/Model ID Matching
+
+Match any Intel I211 network card:
+
+```bash
+ocp-rename-interfaces \
+  --vendor "0x8086" \
+  --model "0x153a" \
+  --names "ptp0" \
+  --mc-name "50-intel-i211-interface" \
+  --output intel-i211.yaml
+```
+
+### Example 6: Auto-detect from Local Interface
+
+Auto-detect vendor/model from a local interface (Linux only):
+
+```bash
+ocp-rename-interfaces \
+  --refIfName "enp0s3" \
+  --names "ptp0" \
+  --output auto-detected.yaml
+```
+
+This will run `udevadm info -q property -p /sys/class/net/enp0s3` locally.
+
+### Example 7: Auto-detect from Cluster Node
+
+Auto-detect vendor/model from an interface on a cluster node:
+
+```bash
+ocp-rename-interfaces \
+  --refIfName "eno1" \
+  --node "worker-0" \
+  --kubeconfig ~/.kube/config \
+  --names "ptp0" \
+  --output auto-detected-cluster.yaml
+```
+
+This will run `oc debug node/worker-0 -- chroot /host udevadm info -q property -p /sys/class/net/eno1` to detect the vendor and model IDs from the cluster node.
 
 ## Generated MachineConfig Structure
 
@@ -243,7 +343,22 @@ make clean
 
 ### Interface Matching
 
-Interfaces are matched by MAC address in the `[Match]` section of the `.link` file.
+Interfaces can be matched in two ways in the `[Match]` section of the `.link` file:
+
+**MAC Address Matching:**
+```
+[Match]
+MACAddress=aa:bb:cc:dd:ee:ff
+```
+
+**Property-based Matching (Vendor/Model ID):**
+```
+[Match]
+Property=ID_VENDOR_ID==0x8086
+Property=ID_MODEL_ID==0x153a
+```
+
+Property-based matching is useful when you want to match any interface of a specific hardware type, regardless of its MAC address.
 
 ### Naming Methods
 
@@ -265,6 +380,55 @@ NamePolicy schemes (applied in order):
 - `onboard`: Uses BIOS/firmware onboard index
 - `mac`: Uses MAC address
 - `keep`: Keeps existing name
+
+## How to Find Vendor/Model IDs
+
+### Using udevadm (Local Linux)
+
+```bash
+udevadm info -q property -p /sys/class/net/enp0s3 | grep -E "ID_VENDOR_ID|ID_MODEL_ID"
+```
+
+Example output:
+```
+ID_VENDOR_ID=8086
+ID_MODEL_ID=153a
+```
+
+### Using oc debug (Cluster Node)
+
+```bash
+oc debug node/worker-0 -- chroot /host udevadm info -q property -p /sys/class/net/eno1 | grep -E "ID_VENDOR_ID|ID_MODEL_ID"
+```
+
+### Using lspci
+
+```bash
+lspci -nn | grep Ethernet
+```
+
+Example output:
+```
+00:03.0 Ethernet controller [0200]: Intel Corporation I211 Gigabit Network Connection [8086:153a] (rev 03)
+```
+
+The vendor ID is `8086` and model ID is `153a`. Add `0x` prefix when using with the tool.
+
+### Common Vendor/Model IDs
+
+**Intel Network Cards:**
+- Intel I210: `--vendor 0x8086 --model 0x1533`
+- Intel I211: `--vendor 0x8086 --model 0x153a`
+- Intel I350: `--vendor 0x8086 --model 0x1521`
+- Intel 82599: `--vendor 0x8086 --model 0x10fb`
+
+**Broadcom Network Cards:**
+- BCM5720: `--vendor 0x14e4 --model 0x165f`
+- BCM57810: `--vendor 0x14e4 --model 0x168e`
+
+**Mellanox Network Cards:**
+- ConnectX-4: `--vendor 0x15b3 --model 0x1013`
+- ConnectX-5: `--vendor 0x15b3 --model 0x1017`
 
 ## Troubleshooting
 
@@ -304,6 +468,34 @@ NamePolicy schemes (applied in order):
    ```bash
    journalctl -u systemd-networkd
    ```
+
+### Vendor/Model Detection Issues
+
+**Error: "could not find vendor ID and/or model ID"**
+
+Possible causes:
+- Interface doesn't exist
+- Interface is virtual (no PCI vendor/model IDs)
+- Wrong interface name
+
+Solutions:
+- Verify interface exists: `ip link show` or `oc debug node/<node> -- chroot /host ip link`
+- Try a different physical interface
+- Check interface name spelling
+
+**Error: "failed to execute oc debug node"**
+
+Possible causes:
+- `oc` CLI not installed
+- Invalid kubeconfig
+- No cluster access
+- Insufficient permissions
+
+Solutions:
+- Install `oc` CLI: Check [OpenShift CLI installation](https://docs.openshift.com/container-platform/latest/cli_reference/openshift_cli/getting-started-cli.html)
+- Verify cluster access: `oc get nodes`
+- Check kubeconfig: `echo $KUBECONFIG` or use `--kubeconfig` flag
+- Ensure you have permissions to create debug pods
 
 ## Contributing
 

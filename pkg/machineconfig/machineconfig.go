@@ -134,6 +134,51 @@ func NewMachineConfigWithPolicy(name, role string, macAddresses []string, namePo
 	return createMachineConfig(name, role, files), nil
 }
 
+// NewMachineConfigWithPropertyAndName creates a MachineConfig with Property-based matching and explicit name
+func NewMachineConfigWithPropertyAndName(name, role, vendorID, modelID, interfaceName string) (*MachineConfig, error) {
+	linkFile := generateLinkFileWithPropertyAndName(vendorID, modelID, interfaceName)
+	encodedContent := encodeLinkFile(linkFile)
+
+	files := []File{
+		{
+			Path:      fmt.Sprintf("/etc/systemd/network/10-%s.link", interfaceName),
+			Mode:      DefaultFileMode,
+			Overwrite: true,
+			Contents: Contents{
+				Source: encodedContent,
+			},
+			Comment: linkFile,
+		},
+	}
+
+	return createMachineConfig(name, role, files), nil
+}
+
+// NewMachineConfigWithPropertyAndPolicy creates a MachineConfig with Property-based matching and NamePolicy
+func NewMachineConfigWithPropertyAndPolicy(name, role, vendorID, modelID, namePolicy string) (*MachineConfig, error) {
+	linkFile := generateLinkFileWithPropertyAndPolicy(vendorID, modelID, namePolicy)
+	encodedContent := encodeLinkFile(linkFile)
+
+	// Create a safe filename using vendor and model IDs
+	safeVendor := strings.ReplaceAll(vendorID, "0x", "")
+	safeModel := strings.ReplaceAll(modelID, "0x", "")
+	filename := fmt.Sprintf("10-interface-%s-%s.link", safeVendor, safeModel)
+
+	files := []File{
+		{
+			Path:      fmt.Sprintf("/etc/systemd/network/%s", filename),
+			Mode:      DefaultFileMode,
+			Overwrite: true,
+			Contents: Contents{
+				Source: encodedContent,
+			},
+			Comment: linkFile,
+		},
+	}
+
+	return createMachineConfig(name, role, files), nil
+}
+
 func createMachineConfig(name, role string, files []File) *MachineConfig {
 	return &MachineConfig{
 		APIVersion: "machineconfiguration.openshift.io/v1",
@@ -173,6 +218,26 @@ MACAddress=%s
 [Link]
 NamePolicy=%s
 `, macAddress, namePolicy)
+}
+
+func generateLinkFileWithPropertyAndName(vendorID, modelID, interfaceName string) string {
+	return fmt.Sprintf(`[Match]
+Property=ID_VENDOR_ID==%s
+Property=ID_MODEL_ID==%s
+
+[Link]
+Name=%s
+`, vendorID, modelID, interfaceName)
+}
+
+func generateLinkFileWithPropertyAndPolicy(vendorID, modelID, namePolicy string) string {
+	return fmt.Sprintf(`[Match]
+Property=ID_VENDOR_ID==%s
+Property=ID_MODEL_ID==%s
+
+[Link]
+NamePolicy=%s
+`, vendorID, modelID, namePolicy)
 }
 
 func encodeLinkFile(content string) string {
