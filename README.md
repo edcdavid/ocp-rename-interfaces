@@ -72,7 +72,7 @@ ocp-rename-interfaces \
   --output interface-config.yaml
 ```
 
-This matches any Intel (0x8086) I211 (0x153a) network card and renames it to `ptp0`.
+This matches any Intel (0x8086) I211 (0x153a) network card and renames it to `ptp0`. The MachineConfig will be named `50-interface-8086-153a` (automatically includes vendor/model IDs).
 
 ### Auto-detect Vendor/Model ID (Local Machine)
 
@@ -134,7 +134,7 @@ The tool will:
 | `--kubeconfig` | `-k` | Path to kubeconfig file | No |
 | `--output` | `-o` | Output file path (stdout if not specified) | No |
 | `--apply` | `-a` | Apply MachineConfig to cluster | No |
-| `--mc-name` | | MachineConfig resource name (default: 50-interface-rename) | No |
+| `--mc-name` | | MachineConfig resource name (default: 50-interface-rename, or 50-interface-VENDOR-MODEL when using vendor/model) | No |
 
 \* Either `--names` or `--name-policy` must be specified (mutually exclusive)
 
@@ -354,8 +354,8 @@ MACAddress=aa:bb:cc:dd:ee:ff
 **Property-based Matching (Vendor/Model ID):**
 ```
 [Match]
-Property=ID_VENDOR_ID==0x8086
-Property=ID_MODEL_ID==0x153a
+Property=ID_VENDOR_ID=0x8086
+Property=ID_MODEL_ID=0x153a
 ```
 
 Property-based matching is useful when you want to match any interface of a specific hardware type, regardless of its MAC address.
@@ -394,6 +394,8 @@ Example output:
 ID_VENDOR_ID=8086
 ID_MODEL_ID=153a
 ```
+
+Note: The tool uses `Property=ID_VENDOR_ID` and `Property=ID_MODEL_ID` to match against udev properties in `.link` files. The values must include the `0x` prefix to match what udev reports.
 
 ### Using oc debug (Cluster Node)
 

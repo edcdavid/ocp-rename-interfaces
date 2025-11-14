@@ -68,89 +68,107 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 func parseAndValidateFlags() (macs, names []string, policy, vendor, model string, err error) {
 	// Handle vendor/model ID detection
+	vendor, model, err = parseVendorModel()
+	if err != nil {
+		return nil, nil, "", "", "", err
+	}
+
+	// Parse MAC addresses and naming options
+	macs = parseMACAddresses(macAddresses)
+	policy = strings.TrimSpace(namePolicy)
+	if interfaceNames != "" {
+		names = parseCommaSeparated(interfaceNames)
+	}
+
+	// Validate all inputs
+	if err := validateInputs(macs, names, policy, vendor); err != nil {
+		return nil, nil, "", "", "", err
+	}
+
+	return macs, names, policy, vendor, model, nil
+}
+
+func parseVendorModel() (vendor, model string, err error) {
 	vendor = strings.TrimSpace(vendorID)
 	model = strings.TrimSpace(modelID)
 
 	// Auto-detect vendor/model from reference interface
 	if refIfName != "" {
 		if vendor != "" || model != "" {
-			return nil, nil, "", "", "", fmt.Errorf("--refIfName cannot be used with --vendor or --model")
+			return "", "", fmt.Errorf("--refIfName cannot be used with --vendor or --model")
 		}
-		
-		var detectedVendor, detectedModel string
-		var err error
-		
-		// Check if we should detect from cluster node or local machine
-		if node != "" {
-			// Detect from cluster node using oc debug
-			kubeconfigPath := getKubeconfigPath()
-			if kubeconfigPath == "" {
-				return nil, nil, "", "", "", fmt.Errorf("--node requires --kubeconfig or KUBECONFIG environment variable")
-			}
-			fmt.Printf("Detecting vendor/model from interface %s on node %s...\n", refIfName, node)
-			detectedVendor, detectedModel, err = getVendorModelFromClusterNode(kubeconfigPath, node, refIfName)
-			if err != nil {
-				return nil, nil, "", "", "", fmt.Errorf("failed to get vendor/model from node %s interface %s: %w", node, refIfName, err)
-			}
-			fmt.Printf("Auto-detected from node %s interface %s: Vendor ID=%s, Model ID=%s\n", node, refIfName, detectedVendor, detectedModel)
-		} else {
-			// Detect from local machine
-			fmt.Printf("Detecting vendor/model from local interface %s...\n", refIfName)
-			detectedVendor, detectedModel, err = getVendorModelFromInterface(refIfName)
-			if err != nil {
-				return nil, nil, "", "", "", fmt.Errorf("failed to get vendor/model from interface %s: %w", refIfName, err)
-			}
-			fmt.Printf("Auto-detected from local interface %s: Vendor ID=%s, Model ID=%s\n", refIfName, detectedVendor, detectedModel)
+
+		vendor, model, err = detectVendorModel()
+		if err != nil {
+			return "", "", err
 		}
-		
-		vendor = detectedVendor
-		model = detectedModel
 	}
 
 	// Validate vendor/model pairing
 	if (vendor != "" && model == "") || (vendor == "" && model != "") {
-		return nil, nil, "", "", "", fmt.Errorf("--vendor and --model must be specified together")
+		return "", "", fmt.Errorf("--vendor and --model must be specified together")
 	}
-	
+
 	// Validate --node usage
 	if node != "" && refIfName == "" {
-		return nil, nil, "", "", "", fmt.Errorf("--node requires --refIfName to specify which interface to detect")
+		return "", "", fmt.Errorf("--node requires --refIfName to specify which interface to detect")
 	}
 
-	// Parse comma-separated MAC addresses
-	macs = parseMACAddresses(macAddresses)
+	return vendor, model, nil
+}
 
+func detectVendorModel() (vendor, model string, err error) {
+	if node != "" {
+		// Detect from cluster node using oc debug
+		kubeconfigPath := getKubeconfigPath()
+		if kubeconfigPath == "" {
+			return "", "", fmt.Errorf("--node requires --kubeconfig or KUBECONFIG environment variable")
+		}
+		fmt.Printf("Detecting vendor/model from interface %s on node %s...\n", refIfName, node)
+		vendor, model, err = getVendorModelFromClusterNode(kubeconfigPath, node, refIfName)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to get vendor/model from node %s interface %s: %w", node, refIfName, err)
+		}
+		fmt.Printf("Auto-detected from node %s interface %s: Vendor ID=%s, Model ID=%s\n", node, refIfName, vendor, model)
+	} else {
+		// Detect from local machine
+		fmt.Printf("Detecting vendor/model from local interface %s...\n", refIfName)
+		vendor, model, err = getVendorModelFromInterface(refIfName)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to get vendor/model from interface %s: %w", refIfName, err)
+		}
+		fmt.Printf("Auto-detected from local interface %s: Vendor ID=%s, Model ID=%s\n", refIfName, vendor, model)
+	}
+
+	return vendor, model, nil
+}
+
+func validateInputs(macs, names []string, policy, vendor string) error {
 	// Check that we have at least one matching method
 	if len(macs) == 0 && vendor == "" {
-		return nil, nil, "", "", "", fmt.Errorf("at least one matching method must be specified: --macs or --vendor/--model")
+		return fmt.Errorf("at least one matching method must be specified: --macs or --vendor/--model")
 	}
 
-	// Parse naming options
-	policy = strings.TrimSpace(namePolicy)
-	if interfaceNames != "" {
-		names = parseCommaSeparated(interfaceNames)
-	}
-
-	// Validate inputs
+	// Validate naming inputs
 	if policy == "" && len(names) == 0 {
-		return nil, nil, "", "", "", fmt.Errorf("either --name-policy or --names must be specified")
+		return fmt.Errorf("either --name-policy or --names must be specified")
 	}
 
 	if policy != "" && len(names) > 0 {
-		return nil, nil, "", "", "", fmt.Errorf("--name-policy and --names are mutually exclusive")
+		return fmt.Errorf("--name-policy and --names are mutually exclusive")
 	}
 
 	// If using --names with MACs, count must match MACs count
 	if len(names) > 0 && len(macs) > 0 && len(names) != len(macs) {
-		return nil, nil, "", "", "", fmt.Errorf("number of names (%d) must match number of MAC addresses (%d)", len(names), len(macs))
+		return fmt.Errorf("number of names (%d) must match number of MAC addresses (%d)", len(names), len(macs))
 	}
 
 	// If using vendor/model with --names, only one name is expected
 	if vendor != "" && len(names) > 1 {
-		return nil, nil, "", "", "", fmt.Errorf("when using --vendor/--model matching, only one interface name can be specified")
+		return fmt.Errorf("when using --vendor/--model matching, only one interface name can be specified")
 	}
 
-	return macs, names, policy, vendor, model, nil
+	return nil
 }
 
 func applyToCluster(macs, names []string, policy, vendor, model string) error {
@@ -264,10 +282,19 @@ func generateMachineConfig(isSingleNode bool, macs, names []string, policy, vend
 
 	// Handle vendor/model-based matching
 	if vendor != "" && model != "" {
-		if len(names) > 0 {
-			return machineconfig.NewMachineConfigWithPropertyAndName(mcName, role, vendor, model, names[0])
+		// Generate a name that includes vendor and model IDs if using default
+		configName := mcName
+		if mcName == "50-interface-rename" {
+			// Strip 0x prefix for the name
+			vendorHex := strings.TrimPrefix(vendor, "0x")
+			modelHex := strings.TrimPrefix(model, "0x")
+			configName = fmt.Sprintf("50-interface-%s-%s", vendorHex, modelHex)
 		}
-		return machineconfig.NewMachineConfigWithPropertyAndPolicy(mcName, role, vendor, model, policy)
+
+		if len(names) > 0 {
+			return machineconfig.NewMachineConfigWithPropertyAndName(configName, role, vendor, model, names[0])
+		}
+		return machineconfig.NewMachineConfigWithPropertyAndPolicy(configName, role, vendor, model, policy)
 	}
 
 	// Handle MAC-based matching
@@ -354,7 +381,7 @@ func getVendorModelFromClusterNode(kubeconfigPath, nodeName, ifName string) (ven
 	// Build the oc debug node command
 	// Command: oc debug node/<node> --kubeconfig=<path> -- chroot /host udevadm info -q property -p /sys/class/net/<ifName>
 	sysPath := fmt.Sprintf("/sys/class/net/%s", ifName)
-	
+
 	args := []string{
 		"debug",
 		fmt.Sprintf("node/%s", nodeName),

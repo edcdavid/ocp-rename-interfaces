@@ -221,9 +221,17 @@ NamePolicy=%s
 }
 
 func generateLinkFileWithPropertyAndName(vendorID, modelID, interfaceName string) string {
+	// Ensure 0x prefix - udev properties include the 0x prefix
+	if !strings.HasPrefix(vendorID, "0x") {
+		vendorID = "0x" + vendorID
+	}
+	if !strings.HasPrefix(modelID, "0x") {
+		modelID = "0x" + modelID
+	}
+
 	return fmt.Sprintf(`[Match]
-Property=ID_VENDOR_ID==%s
-Property=ID_MODEL_ID==%s
+Property=ID_VENDOR_ID=%s
+Property=ID_MODEL_ID=%s
 
 [Link]
 Name=%s
@@ -231,9 +239,17 @@ Name=%s
 }
 
 func generateLinkFileWithPropertyAndPolicy(vendorID, modelID, namePolicy string) string {
+	// Ensure 0x prefix - udev properties include the 0x prefix
+	if !strings.HasPrefix(vendorID, "0x") {
+		vendorID = "0x" + vendorID
+	}
+	if !strings.HasPrefix(modelID, "0x") {
+		modelID = "0x" + modelID
+	}
+
 	return fmt.Sprintf(`[Match]
-Property=ID_VENDOR_ID==%s
-Property=ID_MODEL_ID==%s
+Property=ID_VENDOR_ID=%s
+Property=ID_MODEL_ID=%s
 
 [Link]
 NamePolicy=%s
